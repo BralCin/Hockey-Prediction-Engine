@@ -477,6 +477,9 @@ for i in range(len(teams)):
 
 teams = []
 for team in lineups:
+    lineups[team]['team']['season'] = lineups[team]['team']['season'].astype('int')
+    lineups[team]['goalies']['season'] = lineups[team]['goalies']['season'].astype('int')
+    
     df = pd.merge(lineups[team]['team'], lineups[team]['goalies'], how='left', on=['team', 'season'])
     df = pd.merge(df, lineups[team]['skaters'], how='left', on=['team', 'season'])
     
@@ -486,6 +489,7 @@ for team in lineups:
     df = pd.merge(df, df_ts, how='left', on=['team', 'gameDate'])
     df.drop(['gameDate'], axis=1, inplace=True)
     teams.append(df)
+    
 teams_df = pd.concat(teams).fillna(.75)
 teams_df.drop_duplicates(keep=False,inplace=True)
 
@@ -498,6 +502,9 @@ input_df_2 = pd.merge(input_df_2, t2_team_stats, how='left', on=['team2', 'seaso
 # change teams to single column with tuples and set as index
 input_df_2['teams'] = input_df_2[['team1', 'team2']].apply(tuple, axis=1)
 input_df_2 = input_df_2.drop(['team1', 'team2', 'season'], axis=1)
+
+input_df_2['xGoalsPercentage_5on5_1'] = input_df_2['xGoalsPercentage_5on5_1'].astype('float')
+input_df_2['xGoalsPercentage_5on5_2'] = input_df_2['xGoalsPercentage_5on5_2'].astype('float')
 
 # load dataset and check for errors
 input_df = pd.read_csv('../data/output/input_df.csv')
