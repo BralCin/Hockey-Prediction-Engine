@@ -1,29 +1,34 @@
+# import standard modules
 import pandas as pd
 import numpy as np
 import re
 from datetime import datetime
 
+# import web modules
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from bs4 import BeautifulSoup
 from urllib.request import Request, urlopen
 
+# import ML modules
 import xgboost as xgb
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import classification_report, plot_confusion_matrix, confusion_matrix, accuracy_score
 
+# ignore warnings (for deprecation warnings)
 import warnings
 warnings.filterwarnings('ignore')
 
 ## Prepare Game Results
-
+# import '21-'22 season game schedule
 df_games_season = pd.read_csv('../data/games/21-22_season.csv')
-
+# add 'season' and 'home_or_away' columns for conformity to historical data
+# all games are 'HOME' due to team 1 always being home team in this season data
 df_games_season['season'] = 2021
 df_games_season['home_or_away'] = 'HOME'
-
+# rename columns to confrom to historical data
 game_results = df_games_season.rename(columns={"Date": "gameDate", "Home": "playerTeam", "Visitor": "opposingTeam", "Score.1": "goalsFor", "Score": "goalsAgainst"})
 
 # define fucntion to create column of game results
@@ -36,7 +41,7 @@ def game_result_label_race(row):
     if row['goalsFor'] < row['goalsAgainst']:
         return 'team 2'
 
-# define fucntion that encodes home team
+# define fucntions that encode home team for t1 and t2
 # 1 if team1 is home team
 # 2 if team2 is home team
 def home_team_t1_label_race(row):
@@ -52,6 +57,7 @@ def home_team_t2_label_race(row):
     if row['home_or_away'] == 'AWAY':
         return 1   
 
+# create placeholder values for encoded game result    
 game_results['home_or_away_t1'] = np.nan
 game_results['home_or_away_t2'] = np.nan
 
@@ -68,6 +74,7 @@ game_results = game_results[['gameDate', 'season', 'team1', 'team2', 'result', '
 # convert date to python date
 game_results['gameDate']= pd.to_datetime(game_results['gameDate'])
 
+# create list of team names
 teams = ['Anaheim Ducks',
          'Arizona Coyotes',
          'Boston Bruins',
@@ -101,12 +108,13 @@ teams = ['Anaheim Ducks',
          'Washington Capitals',
          'Winnipeg Jets']
 
+# create list of team abbreviations
 teams_abv = ['ANA', 'ARI', 'BOS', 'BUF', 'CGY', 'CAR', 'CHI', 'COL', 
              'CBJ', 'DAL', 'DET', 'EDM', 'FLA', 'LAK', 'MIN', 'MTL',
              'NSH', 'NJD', 'NYI', 'NYR', 'OTT', 'PHI', 'PIT', 'SJS', 
              'SEA', 'STL', 'TBL', 'TOR', 'VAN', 'VGK', 'WSH', 'WPG']
 
-
+# create functions that replace team names with team abbreviations
 def t1_abv_label_race(row):
     for i in range(32):
         if row['team1'] == teams[i]:
@@ -117,28 +125,32 @@ def t2_abv_label_race(row):
     for i in range(32):
         if row['team2'] == teams[i]:
             return teams_abv[i]   
-
+        
+# remove periods from team names in df
 game_results['team1'] = game_results['team1'].str.replace('.', '')
 game_results['team2'] = game_results['team2'].str.replace('.', '')
 
+# apply abbreviation functions to team names in df
 game_results['team1'] = game_results.apply(lambda row: t1_abv_label_race(row), axis=1)
 game_results['team2'] = game_results.apply(lambda row: t2_abv_label_race(row), axis=1)
 
+# separate already played games from unplayed games
 upcoming_games = game_results[game_results.isna().any(axis=1)]
 game_results = game_results[~game_results.isna().any(axis=1)]
 
+# create object for todays date
 today = datetime.today().strftime('%Y-%m-%d')
+# select todays games
 todays_games = upcoming_games.loc[upcoming_games['gameDate'] == today].drop(['result'], axis=1).reset_index(drop=True)
 
-todays_games
-
 ## Web
-
-# lines
+# line/pairing data
+# query MoneyPuck for up-to-date line/pairing data
 req = Request('https://moneypuck.com/moneypuck/playerData/seasonSummary/2021/regular/lines.csv')
 req.add_header('User-Agent', 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:77.0) Gecko/20100101 Firefox/77.0')
 content = urlopen(req)
 
+# create list of tracked statistics
 tracked_statistics1 = ['name', 'season', 'team', 'icetime',
                       'flurryScoreVenueAdjustedxGoalsFor', 'xOnGoalFor', 'reboundxGoalsFor',
                       'penaltiesAgainst', 'takeawaysFor',
@@ -147,6 +159,7 @@ tracked_statistics1 = ['name', 'season', 'team', 'icetime',
                       'penaltiesFor', 'takeawaysAgainst',
                       'lowDangerxGoalsAgainst', 'mediumDangerxGoalsAgainst','highDangerxGoalsAgainst']
 
+# import queried csv and filter for tracked stats
 df_lines = pd.read_csv(content)
 df_lines = df_lines[tracked_statistics1]
 
@@ -173,11 +186,13 @@ minor_stats = ['xOnGoalFor', 'xOnGoalAgainst',
                'reboundxGoalsFor', 'reboundxGoalsAgainst',
                'lowDangerxGoalsFor', 'lowDangerxGoalsAgainst']
 
-# skater
+# skater data
+# query MoneyPuck for up-to-date skater data
 req = Request('https://moneypuck.com/moneypuck/playerData/seasonSummary/2021/regular/skaters.csv')
 req.add_header('User-Agent', 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:77.0) Gecko/20100101 Firefox/77.0')
 content = urlopen(req)
 
+# create list of tracked statistics
 tracked_statistics2 = ['name', 'position', 'season', 'team', 'icetime',
                       'OnIce_F_flurryScoreVenueAdjustedxGoals', 'OnIce_F_xOnGoal', 'OnIce_F_reboundxGoals',
                       'penaltiesDrawn', 'I_F_takeaways',
@@ -186,25 +201,34 @@ tracked_statistics2 = ['name', 'position', 'season', 'team', 'icetime',
                       'penalties', 'I_F_giveaways',
                       'OnIce_A_lowDangerxGoals', 'OnIce_A_mediumDangerxGoals', 'OnIce_A_highDangerxGoals']
 
+# import queried csv and filter for 5on5 stats
 df_skaters = pd.read_csv(content)
 df_skaters = df_skaters.loc[(df_skaters['situation'] == '5on5')]
+
+# isolate last name from full name
 df_skaters['name'] = df_skaters['name'].str.split().str[1]
+
+# apply tracked statists and rename columns to conform to line and team data
 df_skaters = df_skaters[tracked_statistics2]
 df_skaters.columns = tracked_statistics2
 
-# goalie
+# goalie data
+# query MoneyPuck for up-to-date goalie data
 req1 = Request('https://moneypuck.com/moneypuck/playerData/seasonSummary/2021/regular/goalies.csv')
 req1.add_header('User-Agent', 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:77.0) Gecko/20100101 Firefox/77.0')
 content1 = urlopen(req1)
 
+# query MoneyPuck for goalie data column names due to occasional uploads with no headers
 req2 = Request('https://moneypuck.com/moneypuck/playerData/seasonSummary/2020/regular/goalies.csv')
 req2.add_header('User-Agent', 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:77.0) Gecko/20100101 Firefox/77.0')
 content2 = urlopen(req2)
 
+# import queried csvs and apply header to up-to-date data
 df_goalies = pd.read_csv(content1, header=None)
 df_goalies_labels = pd.read_csv(content2)
 df_goalies = pd.DataFrame(data=df_goalies.values, columns=df_goalies_labels.columns)
 
+# create list of tracked statistics
 tracked_statistics3 = ['name', 'team', 'season', 'games_played',
                       'xRebounds',  'xOnGoal', 'xPlayContinuedInZone',
                       'lowDangerxGoals', 'mediumDangerxGoals', 'highDangerxGoals',
@@ -237,79 +261,100 @@ df_goalies['goalie_strength'] = df_goalies['goalie_strength_neg'] + df_goalies['
 df_goalies.drop(goalie_reg, axis=1, inplace=True)
 df_goalies.drop(['goalie_strength_neg', 'goalie_strength_pos', 'games_played'], axis=1, inplace=True)
 
+# apply value to 'season' column to resolve column summing issues
 df_goalies['season'] = 2021
 
 # split off first name leaving only last name
 df_goalies['name'] = df_goalies['name'].str.split().str[1]
 
-# team
+# team data
+# query MoneyPuck for up-to-date team data
 req1 = Request('https://moneypuck.com/moneypuck/playerData/seasonSummary/2021/regular/teams.csv')
 req1.add_header('User-Agent', 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:77.0) Gecko/20100101 Firefox/77.0')
 content1 = urlopen(req1)
 
+# query MoneyPuck for team data column names due to occasional uploads with no headers
 req2 = Request('https://moneypuck.com/moneypuck/playerData/seasonSummary/2020/regular/teams.csv')
 req2.add_header('User-Agent', 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:77.0) Gecko/20100101 Firefox/77.0')
 content2 = urlopen(req2)
 
+# import queried csvs and apply header to up-to-date data
 df_teams = pd.read_csv(content1, header=None)
 df_teams_labels = pd.read_csv(content2)
 df_teams = pd.DataFrame(data=df_teams.values, columns=df_teams_labels.columns)
 
+# create list of tracked statistics
 tracked_statistics = ['name', 'season',
                       'xGoalsPercentage',
                       'flurryScoreVenueAdjustedxGoalsFor', 'penaltiesFor', 'dZoneGiveawaysAgainst',
                       'flurryScoreVenueAdjustedxGoalsAgainst', 'penaltiesAgainst', 'dZoneGiveawaysFor']
 
+# filter tracked stats for all major game situations
 team_stats_5on5 = df_teams[tracked_statistics].loc[(df_teams['situation'] == '5on5')].add_suffix('_5on5').rename(columns={"name_5on5": "name", "season_5on5": "season"})
 team_stats_5on4 = df_teams[tracked_statistics].loc[(df_teams['situation'] == '5on4')].add_suffix('_5on4').rename(columns={"name_5on4": "name", "season_5on4": "season"})
 team_stats_4on5 = df_teams[tracked_statistics].loc[(df_teams['situation'] == '4on5')].add_suffix('_4on5').rename(columns={"name_4on5": "name", "season_4on5": "season"})
 
+# create 5on5 team metric and drop old stats
 team_stats_5on5['team_strength_pos'] = team_stats_5on5.loc[:,'flurryScoreVenueAdjustedxGoalsFor_5on5':'dZoneGiveawaysAgainst_5on5'].mean(axis = 1)
 team_stats_5on5['team_strength_neg'] = team_stats_5on5.loc[:,'flurryScoreVenueAdjustedxGoalsAgainst_5on5':].mean(axis = 1).mul(-.5)
 team_stats_5on5['team_strength_5on5'] = team_stats_5on5.iloc[:, -2:].sum(axis=1)
 team_stats_5on5.drop(['team_strength_pos', 'team_strength_neg'], axis=1, inplace=True)
 
+# create 5on4 team metric and drop old stats
 team_stats_5on4['team_strength_pos'] = team_stats_5on4.loc[:,'flurryScoreVenueAdjustedxGoalsFor_5on4':'dZoneGiveawaysAgainst_5on4'].mean(axis = 1)
 team_stats_5on4['team_strength_neg'] = team_stats_5on4.loc[:,'flurryScoreVenueAdjustedxGoalsAgainst_5on4':].mean(axis = 1).mul(-.5)
 team_stats_5on4['team_strength_5on4'] = team_stats_5on4.iloc[:, -2:].sum(axis=1)
 team_stats_5on4.drop(['team_strength_pos', 'team_strength_neg', 'xGoalsPercentage_5on4'], axis=1, inplace=True)
 
+# create 4on5 team metric and drop old stats
 team_stats_4on5['team_strength_pos'] = team_stats_4on5.loc[:,'flurryScoreVenueAdjustedxGoalsFor_4on5':'dZoneGiveawaysAgainst_4on5'].mean(axis = 1)
 team_stats_4on5['team_strength_neg'] = team_stats_4on5.loc[:,'flurryScoreVenueAdjustedxGoalsAgainst_4on5':].mean(axis = 1).mul(-.5)
 team_stats_4on5['team_strength_4on5'] = team_stats_4on5.iloc[:, -2:].sum(axis=1)
 team_stats_4on5.drop(['team_strength_pos', 'team_strength_neg', 'xGoalsPercentage_4on5'], axis=1, inplace=True)
 
+# merge situation stats to single df
 team_stats = pd.merge(team_stats_5on5, team_stats_5on4, how='left', on=['name', 'season'])
 team_stats = pd.merge(team_stats, team_stats_4on5, how='left', on=['name', 'season'])
 
+# clean team names and fill any potential nans with median 
 team_stats['name'] = team_stats['name'].str.replace('.', '')
 team_stats.fillna(team_stats.median(), inplace=True)
+
+# df filtered to only used stats
 df_teams = team_stats[['name', 'season', 'xGoalsPercentage_5on5', 'team_strength_5on5', 'team_strength_5on4', 'team_strength_4on5']]
 
-# time series
+# time series data
+# query MoneyPuck for historical game data
 req = Request('https://moneypuck.com/moneypuck/playerData/careers/gameByGame/all_teams.csv')
 req.add_header('User-Agent', 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:77.0) Gecko/20100101 Firefox/77.0')
 content = urlopen(req)
 
+# import queried game data and sort by date
 all_games_df = pd.read_csv(content)
 ts = all_games_df
-
 ts.sort_values('gameDate', inplace=True)
 
+# filter df by situation, playoff game status and clean team names
 ts = ts.loc[(ts['situation'] == '5on5') & (ts['playoffGame'] == 0)]
 ts[['team']] = ts[['team']].apply(lambda x: x.str.replace('.', ''))
 
+# convert 'gameDate' column to datetime dtype
 ts['gameDate'] =  pd.to_datetime(ts['gameDate'], format = '%Y%m%d')
 
+# filter out unused columns
 ts = ts[['team', 'gameDate', 'xGoalsPercentage']]
 
+# create list of unique team names
 teams_list = list(ts['team'].unique())
 
+# initialise timeseries dict
 timeseries_teams = {}
 
+# create dict items for each team
 for i  in range(len(teams_list)):
     timeseries_teams[f'{teams_list[i]}'] = ts.loc[ts['team'] == teams_list[i]]
 
+# create time series features for each team
 for i in teams_list:
     df_ts_team = timeseries_teams[i].copy()
     df_ts_team['xGoalsPercentage_last_3'] = df_ts_team['xGoalsPercentage'].rolling(window=3, closed= "left").mean().fillna(.5)
@@ -317,10 +362,14 @@ for i in teams_list:
     df_ts_team['xGoalsPercentage_last_10'] = df_ts_team['xGoalsPercentage'].rolling(window=10, closed= "left").mean().fillna(.5)
     timeseries_teams[i] = df_ts_team
 
+# create df from dict items
 df_ts = pd.concat(timeseries_teams.values(), ignore_index=True).drop(['xGoalsPercentage'], axis=1)
+# fix team names
 df_ts = df_ts.replace(['TB', 'NJ', 'LA', 'SJ'], ['TBL', 'NJD', 'LAK', 'SJS'])
+# sort df and drop duplicate teams
 df_ts = df_ts.sort_values(['team', 'gameDate']).drop_duplicates('team', keep='last')
 
+# create list of team names
 teams = [x.lower() for x in ['Anaheim Ducks',
                              'Arizona Coyotes',
                              'Boston Bruins',
@@ -354,76 +403,91 @@ teams = [x.lower() for x in ['Anaheim Ducks',
                              'Washington Capitals',
                              'Winnipeg Jets']]
 
+# create list of team abbreviations 
 teams_abv = ['ANA', 'ARI', 'BOS', 'BUF', 'CGY', 'CAR', 'CHI', 'COL', 
              'CBJ', 'DAL', 'DET', 'EDM', 'FLA', 'LAK', 'MIN', 'MTL',
              'NSH', 'NJD', 'NYI', 'NYR', 'OTT', 'PHI', 'PIT', 'SJS', 
              'SEA', 'STL', 'TBL', 'TOR', 'VAN', 'VGK', 'WSH', 'WPG']
 
-
+# change team name format to conform to game data
 for i in range(len(teams)):
     teams[i] = teams[i].replace(" ", "-")
 
+# confrom team names in df to game data
 df_lines['name'] = df_lines['name'].str.split('-')
 df_lines['name'] = df_lines['name'].apply(sorted)
 df_lines['name'] = df_lines['name'].apply(lambda x: '-'.join(map(str, x)))
 
+# headless firefox setup
 options = FirefoxOptions()
 options.add_argument("--headless")
 driver = webdriver.Firefox(options=options)
 
+# initialise lineup dict
 lineups = {}
-
+# create daily lineups
 for i in range(len(teams)):
+    # query DailyFaceoff for single team line combos
     driver.get(f"https://www.dailyfaceoff.com/teams/{teams[i]}/line-combinations/")
-
     content = driver.page_source
     soup = BeautifulSoup(content)
-
+    # initialize soup
     players = soup.findAll('span', attrs={'class':'player-name'})
     players = [str(i) for i in players]
     
+    # isolate player names
     for j in range(len(players)):
         s = players[j]
+        # isolate player name
         players[j] = re.search('<span class="player-name">(.*)</span>', s).group(1).split()[-1]
-            
+    
+    # separate skaters from goalies and create lines from skaters        
     skaters = players[:18] + players[-2:]
     lines = [skaters[:3], skaters[3:6], skaters[6:9], skaters[9:12], skaters[12:14], skaters[14:16], skaters[16:18]]
     goalies = [players[36], players[37]]
     
+    # create lines dataframe
     df_s = pd.DataFrame({'name': lines})
     df_s['name'][0:7] = df_s['name'][0:7].apply(sorted)
     df_s['name'][0:7] = df_s['name'][0:7].apply(lambda x: '-'.join(map(str, x)))
     df_s = pd.merge(df_s, df_lines, how='left', on='name')
     
+    # create line stat approximations for lines that aren't in line list
     for k in range(7):
+        # check for null lines
         if df_s.iloc[k].isna().sum() != 0:
+            # isolate forwards
             if k < 4:
+                # pull stats for players in dummy line
                 line = df_s['name'][k].split('-')
                 line_players = pd.concat([df_skaters.loc[(df_skaters['name'] == line[0]) & (df_skaters['team'] == teams_abv[i])],
                                           df_skaters.loc[(df_skaters['name'] == line[1]) & (df_skaters['team'] == teams_abv[i])],
                                           df_skaters.loc[(df_skaters['name'] == line[2]) & (df_skaters['team'] == teams_abv[i])]])
-
+                # mean individual stats
                 line_players.loc[0] = line_players.mean()
                 line_players = line_players.loc[[0]]
-
+                # create line name and drop unused columns
                 line_players['name'] = '-'.join(line)
                 line_players['team'] = teams_abv[i]
                 line_players.drop(['position'], axis=1, inplace=True)
-            
+                # write dummy line to lines df
                 df_s.iloc[k] = line_players.iloc[0]
+            # isolate defense           
             else:
+                # pull stats for players in dummy line
                 line = df_s['name'][k].split('-')
                 line_players = pd.concat([df_skaters.loc[(df_skaters['name'] == line[0]) & (df_skaters['team'] == teams_abv[i])],
                                           df_skaters.loc[(df_skaters['name'] == line[1]) & (df_skaters['team'] == teams_abv[i])]])
-
+                # pull stats for players in dummy line
                 line_players.loc[0] = line_players.mean()
                 line_players = line_players.loc[[0]]
-
+                # create pairing name and drop unused columns
                 line_players['name'] = '-'.join(line)
                 line_players['team'] = teams_abv[i]
                 line_players.drop(['position'], axis=1, inplace=True)
-
+                # write dummy pairing to lines df
                 df_s.iloc[k] = line_players.iloc[0]
+        # handles any extra players in df
         else:
             pass
                      
@@ -443,20 +507,24 @@ for i in range(len(teams)):
     df_s['strength'] = df_s.iloc[:, -2:].sum(axis=1)
     df_s.drop(['strength_pos', 'strength_neg', 'icetime'], axis=1, inplace=True)
     
+    # create lines dataframe from skaters dataframe
     df_s = df_s[['name', 'season', 'team', 'strength']].sort_index().reset_index(drop=True).fillna(df_s.mode().iloc[0])
     df_l = df_s[['season', 'team']].iloc[:1]
 
+    # weight lines by average icetime
     df_l['line1_strength'] = df_s['strength'][0] * .32
     df_l['line2_strength'] = df_s['strength'][1] * .27
     df_l['line3_strength'] = df_s['strength'][2] * .22
     df_l['line4_strength'] = df_s['strength'][3] * .19
     df_l['forward_strength'] = df_l.loc[:, 'line1_strength':'line4_strength'].sum(axis=1)
     
+    # weight pairing by average icetime
     df_l['pair1_strength'] = df_s['strength'][4] * .39
     df_l['pair2_strength'] = df_s['strength'][5] * .33
     df_l['pair3_strength'] = df_s['strength'][6] * .28
     df_l['defense_strength'] = df_l.loc[:, 'pair1_strength':'pair3_strength'].sum(axis=1)
     
+    # drop unused columns
     df_s = df_l.drop(['line1_strength', 'line2_strength', 'line3_strength', 'line4_strength',
                               'pair1_strength', 'pair2_strength', 'pair3_strength'], axis=1).reset_index(drop=True)
     
@@ -474,28 +542,34 @@ for i in range(len(teams)):
     # create lineup dictionary
     lineups[f'{teams_abv[i]}'] = {'skaters': df_s, 'goalies': df_g, 'team': df_t}
 
-
+# create teams list
 teams = []
+# creates todays stats for every team
 for team in lineups:
+    # set columns to correct dtypes
     lineups[team]['team']['season'] = lineups[team]['team']['season'].astype('int')
     lineups[team]['goalies']['season'] = lineups[team]['goalies']['season'].astype('int')
-    
+    # merge stats to single df
     df = pd.merge(lineups[team]['team'], lineups[team]['goalies'], how='left', on=['team', 'season'])
     df = pd.merge(df, lineups[team]['skaters'], how='left', on=['team', 'season'])
-    
+    # set 'gameDate' to todays date
     df['gameDate'] = today
     df_ts['gameDate'] = today   
-    
+    # merge team stats with timeseries stats
     df = pd.merge(df, df_ts, how='left', on=['team', 'gameDate'])
     df.drop(['gameDate'], axis=1, inplace=True)
+    # append to teams list
     teams.append(df)
-    
+
+# fill missing values and drop duplicates
 teams_df = pd.concat(teams).fillna(.75)
 teams_df.drop_duplicates(keep=False,inplace=True)
 
+# create t1 and t2 versions of stats
 t1_team_stats = teams_df.rename(columns={'team': 'team1'})
 t2_team_stats = teams_df.rename(columns={'team': 'team2'})
 
+# merge t1 and t2 stats to todays games
 input_df_2 = pd.merge(todays_games, t1_team_stats, how='left', on=['team1', 'season'])
 input_df_2 = pd.merge(input_df_2, t2_team_stats, how='left', on=['team2', 'season'], suffixes=('_1', '_2'))
 
@@ -503,6 +577,7 @@ input_df_2 = pd.merge(input_df_2, t2_team_stats, how='left', on=['team2', 'seaso
 input_df_2['teams'] = input_df_2[['team1', 'team2']].apply(tuple, axis=1)
 input_df_2 = input_df_2.drop(['team1', 'team2', 'season'], axis=1)
 
+# change dtype of columns affected by merging
 input_df_2['xGoalsPercentage_5on5_1'] = input_df_2['xGoalsPercentage_5on5_1'].astype('float')
 input_df_2['xGoalsPercentage_5on5_2'] = input_df_2['xGoalsPercentage_5on5_2'].astype('float')
 
